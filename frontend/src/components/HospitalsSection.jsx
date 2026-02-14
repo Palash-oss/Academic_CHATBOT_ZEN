@@ -6,10 +6,6 @@ const translations = {
   or: { nearby_hospitals_title: 'ନିକଟସ୍ଥ ହସ୍ପିଟାଲ୍', btn_location: 'ମୋ ଲୋକେସନ୍ ନିଅନ୍ତୁ' }
 }
 
-declare global {
-  var L: any
-}
-
 export default function HospitalsSection() {
   const mapRef = useRef(null)
   const mapInstanceRef = useRef(null)
