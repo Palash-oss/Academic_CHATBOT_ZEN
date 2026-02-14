@@ -1,361 +1,407 @@
 from flask import Flask, render_template, jsonify, request
 from flask_cors import CORS
 from src.helper import download_hugging_face_embeddings
+from src.prompt import system_prompt
 from langchain_pinecone import PineconeVectorStore
 from langchain_core.vectorstores import VectorStoreRetriever
-from transformers import pipeline
+from openai import OpenAI, APIError, RateLimitError
+import google.generativeai as genai
 from dotenv import load_dotenv
 import os
-import math
-import time
-import requests
-import json
+from datetime import datetime
 
-# Configure paths so templates/static live in ../frontend
-BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-FRONTEND_DIR = os.path.join(BASE_DIR, 'frontend')
-FRONTEND_STATIC = os.path.join(FRONTEND_DIR, 'static')
-FRONTEND_TEMPLATES = os.path.join(FRONTEND_DIR, 'templates')
-
-app = Flask(__name__, static_folder=FRONTEND_STATIC, template_folder=FRONTEND_TEMPLATES)
+# Initialize Flask App
+app = Flask(__name__)
 CORS(app)
-
 load_dotenv()
 
+# API Keys
+GROK_API_KEY = os.environ.get('GROK_API_KEY')
+GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
 PINECONE_API_KEY = os.environ.get('PINECONE_API_KEY')
-WHATSAPP_VERIFY_TOKEN = os.environ.get('WHATSAPP_VERIFY_TOKEN') or ""
-WHATSAPP_TOKEN = os.environ.get('WHATSAPP_TOKEN') or ""
-WHATSAPP_PHONE_ID = os.environ.get('WHATSAPP_PHONE_ID') or ""
-TWILIO_AUTH_TOKEN = os.environ.get('TWILIO_AUTH_TOKEN') or ""
-TWILIO_ACCOUNT_SID = os.environ.get('TWILIO_ACCOUNT_SID') or ""
-TWILIO_WHATSAPP_FROM = os.environ.get('TWILIO_WHATSAPP_FROM') or ""
 
 os.environ["PINECONE_API_KEY"] = PINECONE_API_KEY or ""
 
+
+# Initialize Embeddings and Pinecone
 embeddings = download_hugging_face_embeddings()
+index_name = "cbse-academic-chatbot"
 
-index_name = "medical-chatbot"
-docsearch = PineconeVectorStore.from_existing_index(
-    index_name=index_name,
-    embedding=embeddings
-)
-
-retriever = docsearch.as_retriever(search_type="mmr", search_kwargs={"k": 3, "fetch_k": 12})
-
-retriever_hospitals: VectorStoreRetriever = docsearch.as_retriever(
-    search_type="mmr",
-    search_kwargs={"k": 4, "fetch_k": 16, "filter": {"doc_type": "hospital_list"}},
-)
-
-retriever_odia: VectorStoreRetriever = docsearch.as_retriever(
-    search_type="mmr",
-    search_kwargs={"k": 3, "fetch_k": 12, "filter": {"lang": "or"}},
-)
-
-retriever_hospitals_odia: VectorStoreRetriever = docsearch.as_retriever(
-    search_type="mmr",
-    search_kwargs={"k": 4, "fetch_k": 16, "filter": {"doc_type": "hospital_list", "lang": "or"}},
-)
-
-def normalize_lang(code: str) -> str:
-    mapping = {"en": "English", "hi": "Hindi", "or": "Odia"}
-    return mapping.get((code or "en").lower(), "English")
-
-# --- Simple geocoding utilities ---
-_geo_cache = {}
-
-def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    R = 6371.0
-    phi1 = math.radians(lat1)
-    phi2 = math.radians(lat2)
-    dphi = math.radians(lat2 - lat1)
-    dlambda = math.radians(lon2 - lon1)
-    a = math.sin(dphi/2)**2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda/2)**2
-    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-    return R * c
-
-def geocode_place(query: str):
-    key = query.strip().lower()
-    if key in _geo_cache:
-        return _geo_cache[key]
-    try:
-        resp = requests.get(
-            "https://nominatim.openstreetmap.org/search",
-            params={"q": query, "format": "json", "limit": 1},
-            headers={"User-Agent": "medibot/1.0 (contact: example@example.com)"},
-            timeout=10,
-        )
-        if resp.status_code == 200:
-            data = resp.json()
-            if data:
-                item = data[0]
-                lat = float(item.get("lat"))
-                lon = float(item.get("lon"))
-                display_name = item.get("display_name")
-                result = {"lat": lat, "lng": lon, "address": display_name}
-                _geo_cache[key] = result
-                time.sleep(1.0)
-                return result
-    except Exception as _:
-        pass
-    _geo_cache[key] = None
-    return None
-
-def build_hospital_list_from_text(user_lat: float, user_lng: float, raw_text: str, max_items: int = 10):
-    lines = [l.strip(" -•\t").strip() for l in (raw_text or "").split("\n") if l.strip()]
-    hospitals = []
-    for line in lines:
-        if len(hospitals) >= max_items:
-            break
-        geo = geocode_place(line)
-        if not geo:
-            continue
-        distance_km = _haversine_km(user_lat, user_lng, geo["lat"], geo["lng"]) if user_lat is not None and user_lng is not None else None
-        hospitals.append({
-            "name": line,
-            "address": geo.get("address"),
-            "lat": geo.get("lat"),
-            "lng": geo.get("lng"),
-            "distance_km": round(distance_km, 2) if distance_km is not None else None,
-            "map_url": f"https://maps.google.com/?q={requests.utils.quote(line)}"
-        })
-    hospitals.sort(key=lambda h: (h["distance_km"] is None, h.get("distance_km", 0)))
-    return hospitals[:max_items]
-
-def fetch_hospitals_from_osm(user_lat: float, user_lng: float, radius_m: int = 7000, max_items: int = 12):
-    try:
-        query = f"""
-        [out:json][timeout:25];
-        (
-          node["amenity"="hospital"](around:{radius_m},{user_lat},{user_lng});
-          way["amenity"="hospital"](around:{radius_m},{user_lat},{user_lng});
-          relation["amenity"="hospital"](around:{radius_m},{user_lat},{user_lng});
-        );
-        out center {max_items};
-        """
-        resp = requests.post(
-            "https://overpass-api.de/api/interpreter",
-            data=query,
-            headers={"User-Agent": "medibot/1.0 (contact: example@example.com)"},
-            timeout=25,
-        )
-        results = []
-        if resp.status_code == 200:
-            data = resp.json()
-            for el in data.get("elements", [])[:max_items*2]:
-                tags = el.get("tags", {})
-                name = tags.get("name")
-                if not name:
-                    continue
-                lat = el.get("lat") or (el.get("center") or {}).get("lat")
-                lon = el.get("lon") or (el.get("center") or {}).get("lon")
-                if lat is None or lon is None:
-                    continue
-                dist = _haversine_km(user_lat, user_lng, float(lat), float(lon))
-                results.append({
-                    "name": name,
-                    "address": tags.get("addr:full") or tags.get("addr:street"),
-                    "lat": float(lat),
-                    "lng": float(lon),
-                    "distance_km": round(dist, 2),
-                    "map_url": f"https://maps.google.com/?q={requests.utils.quote(name)}@{lat},{lon}",
-                })
-        results.sort(key=lambda h: h.get("distance_km", 1e9))
-        return results[:max_items]
-    except Exception:
-        return []
-
-# Initialize HuggingFace text generation pipeline
 try:
-    qa_pipeline = pipeline("text-generation", model="meta-llama/Llama-2-7b-chat-hf", device=-1)
-except Exception:
-    # Fallback to smaller model if Llama-2 not available
-    qa_pipeline = pipeline("text-generation", model="distilgpt2", device=-1)
+    docsearch = PineconeVectorStore.from_existing_index(
+        index_name=index_name,
+        embedding=embeddings
+    )
+except Exception as e:
+    print(f"Warning: Could not load Pinecone index '{index_name}': {e}")
+    docsearch = None
 
-def get_ai_response(prompt):
-    """Generate response using HuggingFace model"""
+# ═════════════════════════════════════════════════════════
+# TOKEN TRACKER CLASS
+# ═════════════════════════════════════════════════════════
+
+class TokenTracker:
+    """Track API token usage and manage provider exhaustion"""
+    def __init__(self, grok_limit=50000, gemini_limit=1000000):
+        self.grok_tokens = 0
+        self.grok_limit = grok_limit
+        self.gemini_tokens = 0
+        self.gemini_limit = gemini_limit
+        self.grok_exhausted = False
+        self.gemini_exhausted = False
+        self.active_provider = "grok"
+        self.last_switched = None
+
+    def add_grok_tokens(self, tokens):
+        self.grok_tokens += tokens
+        if self.grok_tokens >= self.grok_limit:
+            self.grok_exhausted = True
+            self.switch_provider("gemini")
+
+    def add_gemini_tokens(self, tokens):
+        self.gemini_tokens += tokens
+        if self.gemini_tokens >= self.gemini_limit:
+            self.gemini_exhausted = True
+
+    def switch_provider(self, provider):
+        if provider != self.active_provider:
+            self.active_provider = provider
+            self.last_switched = datetime.now().isoformat()
+            print(f"✅ Switched to {provider.upper()} provider")
+
+    def get_status(self):
+        return {
+            "active_provider": self.active_provider,
+            "grok_tokens": self.grok_tokens,
+            "grok_limit": self.grok_limit,
+            "grok_exhausted": self.grok_exhausted,
+            "gemini_tokens": self.gemini_tokens,
+            "gemini_limit": self.gemini_limit,
+            "gemini_exhausted": self.gemini_exhausted,
+            "last_switched": self.last_switched
+        }
+
+    def can_use_grok(self):
+        return GROK_API_KEY and not self.grok_exhausted
+
+    def can_use_gemini(self):
+        return GEMINI_API_KEY and not self.gemini_exhausted
+
+token_tracker = TokenTracker()
+
+# ═════════════════════════════════════════════════════════
+# AI PROVIDER SETUP
+# ═════════════════════════════════════════════════════════
+
+# Initialize Grok (OpenAI-compatible)
+grok_client = OpenAI(
+    api_key=GROK_API_KEY,
+    base_url="https://api.x.ai/v1"
+) if GROK_API_KEY else None
+
+# Initialize Gemini
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
+    gemini_model = genai.GenerativeModel('gemini-2.5-flash')
+else:
+    gemini_model = None
+
+def get_retriever_for_grade_subject(grade: int, subject: str) -> VectorStoreRetriever:
+    """Get retriever filtered by grade and subject"""
+    if not docsearch:
+        return None
+    
+    filters = {"grade": grade, "subject": subject.lower()}
+    return docsearch.as_retriever(
+        search_type="mmr",
+        search_kwargs={"k": 4, "fetch_k": 16, "filter": filters}
+    )
+
+def call_grok(system_prompt_text: str, user_message: str) -> tuple:
+    """Call Grok API with fallback logic"""
+    if not token_tracker.can_use_grok():
+        return None, None
+    
     try:
-        result = qa_pipeline(prompt, max_length=512, do_sample=True, temperature=0.7)
-        return result[0]['generated_text']
+        response = grok_client.chat.completions.create(
+            model="grok-3-mini",
+            messages=[
+                {"role": "system", "content": system_prompt_text},
+                {"role": "user", "content": user_message}
+            ],
+            temperature=0.7,
+            max_tokens=300
+        )
+        content = response.choices[0].message.content
+        tokens = response.usage.total_tokens if response.usage else 100
+        token_tracker.add_grok_tokens(tokens)
+        return content, "grok"
+    except RateLimitError:
+        print("⚠️ Grok Rate Limit Hit")
+        token_tracker.grok_exhausted = True
+        return None, None
+    except APIError as e:
+        if "quota" in str(e).lower():
+            print("⚠️ Grok Quota Exceeded")
+            token_tracker.grok_exhausted = True
+        return None, None
     except Exception as e:
-        return f"Unable to generate response: {str(e)}"
+        print(f"⚠️ Grok Error: {e}")
+        return None, None
 
-@app.route("/")
-def index():
-    return render_template('index.html')
+def call_gemini(system_prompt_text: str, user_message: str) -> tuple:
+    """Call Gemini API"""
+    if not token_tracker.can_use_gemini():
+        return None, None
+    
+    try:
+        full_prompt = f"{system_prompt_text}\n\nUser: {user_message}"
+        response = gemini_model.generate_content(full_prompt)
+        content = response.text
+        tokens = len(full_prompt.split()) + len(content.split())  # Rough estimation
+        token_tracker.add_gemini_tokens(tokens)
+        return content, "gemini"
+    except Exception as e:
+        print(f"⚠️ Gemini Error: {e}")
+        if "quota" in str(e).lower() or "resource_exhausted" in str(e).lower():
+            token_tracker.gemini_exhausted = True
+        return None, None
+
+def get_ai_response(system_prompt_text: str, user_message: str) -> tuple:
+    """
+    Intelligently route to Grok or Gemini with fallback logic.
+    Returns (response_text, provider_name)
+    """
+    # Try Grok first
+    if token_tracker.can_use_grok():
+        response, provider = call_grok(system_prompt_text, user_message)
+        if response:
+            token_tracker.switch_provider("grok")
+            return response, provider
+        else:
+            # Grok failed, try Gemini
+            if token_tracker.can_use_gemini():
+                response, provider = call_gemini(system_prompt_text, user_message)
+                if response:
+                    token_tracker.switch_provider("gemini")
+                    return response, provider
+    
+    # If Grok disabled/exhausted, use Gemini
+    elif token_tracker.can_use_gemini():
+        response, provider = call_gemini(system_prompt_text, user_message)
+        if response:
+            token_tracker.switch_provider("gemini")
+            return response, provider
+    
+    return "Sorry, I'm unable to respond right now. Please try again later! 🤔", None
+
+# ═════════════════════════════════════════════════════════
+# ACADEMIC ENDPOINTS
+# ═════════════════════════════════════════════════════════
+
+@app.route("/api/status", methods=["GET"])
+def status():
+    """Get current AI provider status and token usage"""
+    return jsonify(token_tracker.get_status())
 
 @app.route("/api/chat", methods=["POST"])
 def chat():
-    try:
-        data = request.json
-        msg = data.get('message', '')
-        lang = data.get('language', 'en')
-        lat = data.get('lat')
-        lng = data.get('lng')
-
-        if not msg:
-            return jsonify({"error": "No message provided"}), 400
-
-        target_language = normalize_lang(lang)
-        # For now, we do not translate, but you can add translation logic here if needed
-
-        # Choose retriever based on language (Odia -> Odia-only materials)
-        active_retriever = retriever_odia if target_language == "Odia" else retriever
-
-        # Retrieve relevant documents
-        relevant_docs = active_retriever.get_relevant_documents(msg)
-        context = "\n".join([doc.page_content for doc in relevant_docs])
-        prompt = f"You are a helpful medical assistant. Use the following context to answer the question.\n\nContext:\n{context}\n\nQuestion: {msg}\nAnswer:"
-        final_answer = get_ai_response(prompt)
-
-        sources = []
-        for d in relevant_docs or []:
-            meta = d.metadata if hasattr(d, "metadata") else {}
-            sources.append({
-                "source": meta.get("source"),
-                "preview": (d.page_content[:200] + ("..." if len(d.page_content) > 200 else "")) if hasattr(d, "page_content") else None
-            })
-
-        # If coordinates provided, append a short list of nearby hospitals using the hospitals retriever
-        if lat is not None and lng is not None:
-            hospitals_struct = fetch_hospitals_from_osm(float(lat), float(lng))
-            list_lines = []
-            for h in hospitals_struct[:8]:
-                info = f"{h['name']}" + (f" — {h['distance_km']} km" if h.get('distance_km') is not None else "")
-                list_lines.append(f"- {info}")
-            if list_lines:
-                hospitals_section = "\n".join(list_lines)
-                final_answer = f"{final_answer}\n\nNearby hospitals:\n{hospitals_section}"
-
-        return jsonify({"response": final_answer, "sources": sources})
-    except Exception as e:
-        err_msg = str(e)
-        print(f"/api/chat error: {err_msg}")
-        if app.debug:
-            return jsonify({"error": err_msg}), 500
-        return jsonify({"error": "An error occurred processing your request"}), 500
-
-@app.route("/test-bot")
-def test_bot():
-    return render_template('index.html')
-
-@app.route("/alerts")
-def alerts():
-    return render_template('index.html')
-
-@app.route("/nearby-hospitals")
-def nearby_hospitals():
-    return render_template('index.html')
-
-@app.route("/api/nearby-hospitals", methods=["POST"])
-def api_nearby_hospitals():
+    """Main learning chat endpoint"""
     try:
         data = request.json or {}
-        lat = data.get("lat")
-        lng = data.get("lng")
-        lang = data.get("language", "en")
-
-        if lat is None or lng is None:
-            return jsonify({"error": "Missing lat/lng"}), 400
-
-        hospitals = fetch_hospitals_from_osm(float(lat), float(lng))
+        message = data.get('message', '')
+        grade = data.get('grade', 1)
+        subject = data.get('subject', 'Mathematics')
+        language = data.get('language', 'en')
+        
+        if not message:
+            return jsonify({"error": "No message provided"}), 400
+        
+        # Validate grade
+        if grade not in [1, 2, 3, 4]:
+            return jsonify({"error": "Grade must be 1, 2, 3, or 4"}), 400
+        
+        # Get retriever for grade/subject
+        retriever = get_retriever_for_grade_subject(grade, subject)
+        
+        context = ""
+        sources = []
+        if retriever:
+            try:
+                relevant_docs = retriever.get_relevant_documents(message)
+                context = "\n".join([doc.page_content for doc in relevant_docs])
+                sources = [
+                    {
+                        "chapter": doc.metadata.get("chapter", "N/A"),
+                        "page": doc.metadata.get("page_number", "N/A"),
+                        "textbook": doc.metadata.get("textbook_name", "CBSE")
+                    }
+                    for doc in relevant_docs
+                ]
+            except Exception as e:
+                print(f"Retriever error: {e}")
+        
+        # Build system prompt with grade and subject
+        filled_prompt = system_prompt.format(
+            context=context,
+            grade=grade,
+            subject=subject,
+            language=language
+        )
+        
+        # Get AI response
+        response, provider = get_ai_response(filled_prompt, message)
+        
         return jsonify({
-            "hospitals": hospitals
+            "response": response,
+            "provider": provider,
+            "grade": grade,
+            "subject": subject,
+            "sources": sources
         })
     except Exception as e:
-        err = str(e)
-        print(f"/api/nearby-hospitals error: {err}")
-        return jsonify({"error": "Failed to fetch nearby hospitals"}), 500
+        print(f"Chat error: {e}")
+        return jsonify({"error": str(e)}), 500
 
-@app.route("/features")
-def features():
-    return render_template('index.html')
-
-# --- WhatsApp Cloud API integration ---
-@app.route('/webhook', methods=['GET'])
-def verify_webhook():
-    mode = request.args.get('hub.mode')
-    token = request.args.get('hub.verify_token')
-    challenge = request.args.get('hub.challenge')
-    if mode == 'subscribe' and token == WHATSAPP_VERIFY_TOKEN:
-        return challenge, 200
-    return 'Forbidden', 403
-
-def wa_send_message(phone_number_id: str, to: str, text: str) -> bool:
-    if not WHATSAPP_TOKEN or not phone_number_id or not to:
-        return False
+@app.route("/api/quiz", methods=["POST"])
+def quiz():
+    """Generate quiz questions for a grade/subject/topic"""
     try:
-        url = f"https://graph.facebook.com/v19.0/{phone_number_id}/messages"
-        headers = {
-            "Authorization": f"Bearer {WHATSAPP_TOKEN}",
-            "Content-Type": "application/json",
-        }
-        payload = {
-            "messaging_product": "whatsapp",
-            "to": to,
-            "type": "text",
-            "text": {"body": text[:4000]},
-        }
-        resp = requests.post(url, headers=headers, data=json.dumps(payload), timeout=15)
-        return resp.status_code in (200, 201)
-    except Exception:
-        return False
+        data = request.json or {}
+        grade = data.get('grade', 1)
+        subject = data.get('subject', 'Mathematics')
+        topic = data.get('topic', '')
+        difficulty = data.get('difficulty', 'medium')
+        
+        if not topic:
+            return jsonify({"error": "Topic is required"}), 400
+        
+        quiz_prompt = f"""You are Vidya 🌟. Generate a multiple choice quiz question for a Grade {grade} {subject} student about '{topic}'.
 
-@app.route('/webhook', methods=['POST'])
-def receive_webhook():
-    data = request.get_json(silent=True) or {}
+Format your response EXACTLY as JSON (no markdown, just raw JSON):
+{{
+  "question": "Question text here?",
+  "options": {{
+    "A": "Option A",
+    "B": "Option B",
+    "C": "Option C",
+    "D": "Option D"
+  }},
+  "correct_answer": "B",
+  "explanation": "Explanation text",
+  "points": 10,
+  "textbook_reference": "Check [Textbook Name], Chapter [X], Page [Y]"
+}}
+
+Ensure:
+- Question is age-appropriate for Grade {grade}
+- One correct answer
+- Indian context in options
+- Difficulty level: {difficulty}
+- All responses must be valid JSON"""
+        
+        response, provider = get_ai_response(
+            "You are a helpful quiz generator for CBSE students.",
+            quiz_prompt
+        )
+        
+        # Try to parse JSON response
+        import json
+        try:
+            quiz_data = json.loads(response)
+        except:
+            quiz_data = {
+                "question": response,
+                "options": {"A": "Option 1", "B": "Option 2", "C": "Option 3", "D": "Option 4"},
+                "correct_answer": "A",
+                "explanation": "Check textbook for details",
+                "points": 10,
+                "textbook_reference": "CBSE Curriculum"
+            }
+        
+        return jsonify({
+            "quiz": quiz_data,
+            "provider": provider,
+            "grade": grade,
+            "subject": subject
+        })
+    except Exception as e:
+        print(f"Quiz error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/doubt", methods=["POST"])
+def doubt_solver():
+    """Guided doubt-solving endpoint (never gives direct answers)"""
     try:
-        entry = (data.get('entry') or [{}])[0]
-        changes = (entry.get('changes') or [{}])[0]
-        value = changes.get('value') or {}
-        messages = value.get('messages') or []
-        if not messages:
-            return jsonify({"status": "ignored"}), 200
+        data = request.json or {}
+        question = data.get('question', '')
+        grade = data.get('grade', 1)
+        subject = data.get('subject', 'Mathematics')
+        previous_attempts = data.get('previous_attempts', 0)
+        
+        if not question:
+            return jsonify({"error": "Question is required"}), 400
+        
+        # Adjust approach based on attempts
+        if previous_attempts == 0:
+            approach = "Ask a guiding question first"
+        elif previous_attempts == 1:
+            approach = "Give a hint and ask them to try again"
+        else:
+            approach = "Use a completely different explanation method with step-by-step guide"
+        
+        doubt_system_prompt = f"""You are Vidya 🌟 — a patient doubt-solving buddy for Grade {grade} {subject} students.
 
-        msg = messages[0]
-        from_number = msg.get('from')
-        phone_number_id = (value.get('metadata') or {}).get('phone_number_id') or WHATSAPP_PHONE_ID
-        text = (msg.get('text') or {}).get('body') or ''
+IMPORTANT: NEVER give direct answers to student doubts!
 
-        # Use local LLM for WhatsApp as well
-        relevant_docs = retriever.get_relevant_documents(text)
-        context = "\n".join([doc.page_content for doc in relevant_docs])
-        prompt = f"You are a helpful medical assistant. Use the following context to answer the question.\n\nContext:\n{context}\n\nQuestion: {text}\nAnswer:"
-        answer = get_ai_response(prompt)
+Instead:
+1. First ask a guiding question that helps them think
+2. Give a small hint
+3. Let them work it out
+4. Support them step by step
 
-        wa_send_message(phone_number_id, from_number, answer)
-        return jsonify({"status": "ok"}), 200
-    except Exception:
-        return jsonify({"status": "error"}), 200
+Current approach (attempt {previous_attempts}): {approach}
 
-# --- Twilio WhatsApp webhook (no business WA needed) ---
-@app.route('/twilio/whatsapp', methods=['POST'])
-def twilio_whatsapp():
-    try:
-        from_number = request.form.get('From')
-        to_number = request.form.get('To')
-        body = request.form.get('Body') or ''
-
-        relevant_docs = retriever.get_relevant_documents(body)
-        context = "\n".join([doc.page_content for doc in relevant_docs])
-        prompt = f"You are a helpful medical assistant. Use the following context to answer the question.\n\nContext:\n{context}\n\nQuestion: {body}\nAnswer:"
-        answer = get_ai_response(prompt)
-
-        if TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN and TWILIO_WHATSAPP_FROM:
+Use simple words, emojis, and Indian examples. Max 100 words."""
+        
+        retriever = get_retriever_for_grade_subject(grade, subject)
+        context = ""
+        if retriever:
             try:
-                twilio_url = f"https://api.twilio.com/2010-04-01/Accounts/{TWILIO_ACCOUNT_SID}/Messages.json"
-                payload = {
-                    'From': TWILIO_WHATSAPP_FROM,
-                    'To': from_number,
-                    'Body': answer[:1600],
-                }
-                resp = requests.post(twilio_url, data=payload, auth=(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN), timeout=15)
-                _ = resp.status_code
-            except Exception:
+                relevant_docs = retriever.get_relevant_documents(question)
+                context = "\n".join([doc.page_content for doc in relevant_docs])
+            except:
                 pass
-        return ('', 200)
-    except Exception:
-        return ('', 200)
+        
+        filled_prompt = doubt_system_prompt + f"\n\nContext from textbooks:\n{context}"
+        response, provider = get_ai_response(filled_prompt, question)
+        
+        return jsonify({
+            "response": response,
+            "provider": provider,
+            "approach": approach,
+            "grade": grade,
+            "subject": subject
+        })
+    except Exception as e:
+        print(f"Doubt error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+# ═════════════════════════════════════════════════════════
+# HEALTH CHECK
+# ═════════════════════════════════════════════════════════
+
+@app.route("/health", methods=["GET"])
+def health():
+    """Health check endpoint"""
+    return jsonify({
+        "status": "healthy",
+        "service": "Vidya 🌟 Academic Chatbot",
+        "ai_providers": {
+            "grok": {"available": bool(grok_client), "exhausted": token_tracker.grok_exhausted},
+            "gemini": {"available": bool(gemini_model), "exhausted": token_tracker.gemini_exhausted}
+        }
+    })
 
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=8080, debug=True)

@@ -1,26 +1,19 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState } from 'react'
 
 const translations = {
   en: {
-    app_name: 'Healthcare AI Bot',
-    nav_features: 'Features',
-    nav_test_bot: 'Test Bot',
-    nav_alerts: 'Alerts',
-    nav_hospitals: 'Nearby Hospitals',
+    app_name: 'Vidya 🌟',
+    nav_home: 'Home',
+    nav_learn: 'Learn',
+    nav_quiz: 'Quiz',
+    nav_about: 'About',
   },
   hi: {
-    app_name: 'हेल्थकेयर एआई बॉट',
-    nav_features: 'विशेषताएँ',
-    nav_test_bot: 'बॉट आज़माएँ',
-    nav_alerts: 'चेतावनियाँ',
-    nav_hospitals: 'नज़दीकी अस्पताल',
-  },
-  or: {
-    app_name: 'ହେଲ୍ଥକେୟାର୍ ଏଆଇ ବଟ୍',
-    nav_features: 'ବିଶେଷତା',
-    nav_test_bot: 'ବଟ୍ ପରୀକ୍ଷାନ୍ତୁ',
-    nav_alerts: 'ସତର୍କତା',
-    nav_hospitals: 'ନିକଟସ୍ଥ ହସ୍ପିଟାଲ୍',
+    app_name: 'विद्या 🌟',
+    nav_home: 'होम',
+    nav_learn: 'सीखो',
+    nav_quiz: 'क्विज',
+    nav_about: 'बारे में',
   }
 }
 
@@ -42,16 +35,15 @@ export default function Header() {
             <h2>{translations[language].app_name}</h2>
           </div>
           <ul className="nav-menu">
-            <li><a href="#features" className="nav-link" onClick={() => scrollToSection('features')}>{translations[language].nav_features}</a></li>
-            <li><a href="#test-bot" className="nav-link" onClick={() => scrollToSection('test-bot')}>{translations[language].nav_test_bot}</a></li>
-            <li><a href="#alerts" className="nav-link" onClick={() => scrollToSection('alerts')}>{translations[language].nav_alerts}</a></li>
-            <li><a href="#nearby-hospitals" className="nav-link" onClick={() => scrollToSection('nearby-hospitals')}>{translations[language].nav_hospitals}</a></li>
+            <li><a href="#hero" className="nav-link" onClick={() => scrollToSection('hero')}>{translations[language].nav_home}</a></li>
+            <li><a href="#chat" className="nav-link" onClick={() => scrollToSection('chat')}>{translations[language].nav_learn}</a></li>
+            <li><a href="#quiz" className="nav-link" onClick={() => scrollToSection('quiz')}>{translations[language].nav_quiz}</a></li>
+            <li><a href="#features" className="nav-link" onClick={() => scrollToSection('features')}>{translations[language].nav_about}</a></li>
           </ul>
           <div className="language-selector">
             <select value={language} onChange={(e) => setLanguage(e.target.value)}>
-              <option value="en">EN</option>
-              <option value="hi">HI</option>
-              <option value="or">OR</option>
+              <option value="en">🇬🇧 EN</option>
+              <option value="hi">🇮🇳 HI</option>
             </select>
           </div>
         </div>

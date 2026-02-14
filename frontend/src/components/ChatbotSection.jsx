@@ -2,22 +2,28 @@ import React, { useState, useRef, useEffect } from 'react'
 
 const translations = {
   en: {
-    test_bot_title: 'Test the Chatbot',
-    welcome_msg: "Hello! I'm your healthcare assistant. I can help you with symptoms, prevention tips, and vaccination schedules. What would you like to know?",
-    chat_placeholder: 'Type your health question...',
+    learn_title: 'Learn with Vidya 🌟',
+    welcome_msg: "Hi there! 👋 I'm Vidya, your friendly CBSE learning buddy! Ask me anything about Maths, English, Hindi, or EVS for your grade. Let's learn together! 🎓✨",
+    grade_label: 'Your Grade:',
+    subject_label: 'Subject:',
+    chat_placeholder: 'Ask me anything about your studies...',
     btn_send: 'Send',
+    loading_text: 'Thinking...',
+    error_msg: "Sorry, I couldn't connect. Please try again!",
+    points_earned: '⭐ You earned',
+    stars: 'stars!',
   },
   hi: {
-    test_bot_title: 'चैटबॉट आज़माएँ',
-    welcome_msg: 'नमस्ते! मैं आपका स्वास्थ्य सहायक हूँ। मैं लक्षण, रोकथाम टिप्स और टीकाकरण शेड्यूल में आपकी मदद कर सकता हूँ। आप क्या जानना चाहते हैं?',
-    chat_placeholder: 'अपना स्वास्थ्य प्रश्न लिखें...',
-    btn_send: 'भेजें',
-  },
-  or: {
-    test_bot_title: 'ଚାଟବଟ୍ ପରୀକ୍ଷାନ୍ତୁ',
-    welcome_msg: 'ନମସ୍କାର! ମୁଁ ଆପଣଙ୍କ ହେଲ୍ଥ ସହାୟକ। ଲକ୍ଷଣ, ପ୍ରତିରୋଧ ଟିପ୍ସ ଏବଂ ଟୀକାକରଣ ସମ୍ବନ୍ଧୀୟ ସହଯୋଗ କରିପାରିବି। କଣ ଜାଣିବାକୁ ଚାହୁଁଛନ୍ତି?',
-    chat_placeholder: 'ଆପଣଙ୍କ ସ୍ୱାସ୍ଥ୍ୟ ପ୍ରଶ୍ନ ଲେଖନ୍ତୁ...',
-    btn_send: 'ପଠାନ୍ତୁ',
+    learn_title: 'विद्या 🌟 के साथ सीखो',
+    welcome_msg: 'नमस्ते! 👋 मैं विद्या, तुम्हारी दोस्ताना शिक्षा सहायक हूँ! मुझसे गणित, अंग्रेजी, हिंदी या ईवीएस के बारे में कुछ भी पूछो। चलो साथ सीखते हैं! 🎓✨',
+    grade_label: 'तुम्हारी कक्षा:',
+    subject_label: 'विषय:',
+    chat_placeholder: 'अपनी पढ़ाई के बारे में कुछ भी पूछो...',
+    btn_send: 'भेजो',
+    loading_text: 'सोच रहा हूँ...',
+    error_msg: 'माफी चाहता हूँ, कनेक्शन नहीं हो सका। फिर से कोशिश करो!',
+    points_earned: '⭐ तुम्हें मिले',
+    stars: 'सितारे!',
   }
 }
 
@@ -27,7 +33,11 @@ export default function ChatbotSection() {
   ])
   const [input, setInput] = useState('')
   const [language, setLanguage] = useState('en')
+  const [grade, setGrade] = useState(2)
+  const [subject, setSubject] = useState('Mathematics')
   const [loading, setLoading] = useState(false)
+  const [activeProvider, setActiveProvider] = useState('grok')
+  const [points, setPoints] = useState(0)
   const messagesEndRef = useRef(null)
 
   const scrollToBottom = () => {
@@ -38,61 +48,121 @@ export default function ChatbotSection() {
     scrollToBottom()
   }, [messages])
 
+  // Fetch active provider status
+  useEffect(() => {
+    const fetchStatus = async () => {
+      try {
+        const response = await fetch('http://localhost:8080/api/status')
+        const data = await response.json()
+        setActiveProvider(data.active_provider || 'grok')
+      } catch (error) {
+        console.log('Could not fetch provider status')
+      }
+    }
+    
+    const interval = setInterval(fetchStatus, 5000)
+    return () => clearInterval(interval)
+  }, [])
+
   const sendMessage = async (e) => {
     e?.preventDefault()
     if (!input.trim()) return
 
     // Add user message
-    setMessages(prev => [...prev, { type: 'user', text: input }])
+    const userMsg = input
+    setMessages(prev => [...prev, { type: 'user', text: userMsg }])
     setInput('')
     setLoading(true)
 
     try {
-      // Get geolocation
-      let lat = null, lng = null
-      if (navigator.geolocation) {
-        try {
-          const position = await new Promise((resolve, reject) => {
-            navigator.geolocation.getCurrentPosition(resolve, reject, { timeout: 5000 })
-          })
-          lat = position.coords.latitude
-          lng = position.coords.longitude
-        } catch (e) {
-          console.log('Geolocation not available')
-        }
-      }
-
       const response = await fetch('http://localhost:8080/api/chat', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          message: input,
-          language: language,
-          lat: lat,
-          lng: lng
+          message: userMsg,
+          grade: parseInt(grade),
+          subject: subject,
+          language: language
         })
       })
 
       const data = await response.json()
       if (response.ok) {
+        setActiveProvider(data.provider || 'grok')
         setMessages(prev => [...prev, { type: 'bot', text: data.response }])
+        // Award points for each correct interaction
+        setPoints(prev => prev + 10)
       } else {
-        setMessages(prev => [...prev, { type: 'bot', text: `Error: ${data.error || 'Failed to get response'}` }])
+        setMessages(prev => [...prev, { 
+          type: 'bot', 
+          text: `😢 ${translations[language].error_msg}` 
+        }])
       }
     } catch (error) {
-      setMessages(prev => [...prev, { type: 'bot', text: "Sorry, I couldn't connect to the server. Please try again." }])
+      setMessages(prev => [...prev, { 
+        type: 'bot', 
+        text: `😢 ${translations[language].error_msg}` 
+      }])
       console.error('Error:', error)
     } finally {
       setLoading(false)
     }
   }
 
+  const subjects = ['Mathematics', 'English', 'Hindi', 'EVS', 'All']
+
   return (
-    <section id="test-bot" className="chatbot-section">
+    <section id="learn" className="chatbot-section">
       <div className="container">
-        <h2 className="section-title">{translations[language].test_bot_title}</h2>
+        <h2 className="section-title">{translations[language].learn_title}</h2>
+
+        <div className="chat-controls">
+          {/* Language Toggle */}
+          <div className="control-group">
+            <label>Language:</label>
+            <select value={language} onChange={(e) => setLanguage(e.target.value)}>
+              <option value="en">🇬🇧 English</option>
+              <option value="hi">🇮🇳 हिंदी</option>
+            </select>
+          </div>
+
+          {/* Grade Selector */}
+          <div className="control-group">
+            <label>{translations[language].grade_label}</label>
+            <select value={grade} onChange={(e) => setGrade(e.target.value)}>
+              <option value={1}>Grade 1</option>
+              <option value={2}>Grade 2</option>
+              <option value={3}>Grade 3</option>
+              <option value={4}>Grade 4</option>
+            </select>
+          </div>
+
+          {/* Subject Selector */}
+          <div className="control-group">
+            <label>{translations[language].subject_label}</label>
+            <select value={subject} onChange={(e) => setSubject(e.target.value)}>
+              {subjects.map(s => (
+                <option key={s} value={s}>{s}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* AI Provider Badge */}
+          <div className="provider-badge">
+            <span className={`badge ${activeProvider}`}>
+              {activeProvider === 'grok' ? '🤖 Grok' : '✨ Gemini'}
+            </span>
+          </div>
+
+          {/* Points Display */}
+          {points > 0 && (
+            <div className="points-display">
+              ⭐ {points} {translations[language].stars}
+            </div>
+          )}
+        </div>
 
         <div className="chat-container">
           <div className="chat-messages">
@@ -107,7 +177,7 @@ export default function ChatbotSection() {
                   <span className="loading"></span>
                   <span className="loading"></span>
                   <span className="loading"></span>
-                  Thinking...
+                  {translations[language].loading_text}
                 </div>
               </div>
             )}

@@ -2,59 +2,44 @@ import React, { useState } from 'react'
 
 const translations = {
   en: {
-    features_title: 'Features',
-    feat_multi_title: 'Multi-Language Support',
-    feat_multi_desc: 'Get healthcare information in your preferred language',
-    feat_symptom_title: 'Symptom Analysis',
-    feat_symptom_desc: 'Quick assessment of your symptoms with AI-powered insights',
-    feat_prev_title: 'Prevention Tips',
-    feat_prev_desc: 'Stay healthy with personalized prevention recommendations',
-    feat_vax_title: 'Vaccination Schedule',
-    feat_vax_desc: 'Keep track of important vaccinations and immunizations',
-    feat_hosp_title: 'Hospital Locator',
-    feat_hosp_desc: 'Find nearby hospitals and healthcare facilities instantly',
-    feat_247_title: '24/7 Availability',
-    feat_247_desc: 'Get healthcare guidance anytime, anywhere',
+    features_title: 'Why Choose Vidya? 🎓',
+    feat_personalized_title: 'Personalized Learning',
+    feat_personalized_desc: 'Content adapts intelligently to your grade level and learning speed',
+    feat_gamified_title: 'Gamified Quizzes',
+    feat_gamified_desc: 'Earn stars ⭐ and badges 🏆 while mastering each topic',
+    feat_textbook_title: 'Textbook Aligned',
+    feat_textbook_desc: 'Follows CBSE curriculum for Grades 1-4 with verified content',
+    feat_indian_title: 'Indian Context',
+    feat_indian_desc: 'Real examples from Indian daily life: food, festivals, games, culture',
+    feat_doubt_title: 'Guided Doubt Solving',
+    feat_doubt_desc: 'Never just answers! Guided hints help you discover solutions yourself',
+    feat_progress_title: 'Progress Tracking',
+    feat_progress_desc: 'Watch yourself level up with detailed performance insights',
   },
   hi: {
-    features_title: 'विशेषताएँ',
-    feat_multi_title: 'बहुभाषी समर्थन',
-    feat_multi_desc: 'अपनी पसंदीदा भाषा में स्वास्थ्य जानकारी प्राप्त करें',
-    feat_symptom_title: 'लक्षण विश्लेषण',
-    feat_symptom_desc: 'एआई-समर्थित अंतर्दृष्टि के साथ तेज़ आकलन',
-    feat_prev_title: 'रोकथाम सुझाव',
-    feat_prev_desc: 'व्यक्तिगत सिफारिशों के साथ स्वस्थ रहें',
-    feat_vax_title: 'टीकाकरण कार्यक्रम',
-    feat_vax_desc: 'महत्वपूर्ण टीकाकरण का ध्यान रखें',
-    feat_hosp_title: 'अस्पताल लोकेटर',
-    feat_hosp_desc: 'नज़दीकी अस्पताल और सुविधाएँ तुरंत खोजें',
-    feat_247_title: '24/7 उपलब्ध',
-    feat_247_desc: 'कभी भी, कहीं भी स्वास्थ्य मार्गदर्शन',
-  },
-  or: {
-    features_title: 'ବିଶେଷତା',
-    feat_multi_title: 'ବହୁଭାଷୀ ସମର୍ଥନ',
-    feat_multi_desc: 'ଆପଣଙ୍କ ପସନ୍ଦର ଭାଷାରେ ସ୍ୱାସ୍ଥ୍ୟ ସୂଚନା',
-    feat_symptom_title: 'ଲକ୍ଷଣ ବିଶ୍ଳେଷଣ',
-    feat_symptom_desc: 'ଏଆଇ ଆଧାରିତ ତଥ୍ୟ ସହ ତ୍ୱରିତ ମୂଲ୍ୟାୟନ',
-    feat_prev_title: 'ପ୍ରତିରୋଧ ସୁପାରିଶ',
-    feat_prev_desc: 'ବ୍ୟକ୍ତିଗତ ପରାମର୍ଶ ସହିତ ସ୍ୱାସ୍ଥ୍ୟ ରୁହନ୍ତୁ',
-    feat_vax_title: 'ଟୀକାକରଣ ସୂଚୀ',
-    feat_vax_desc: 'ଗୁରୁତ୍ୱପୂର୍ଣ୍ଣ ଟୀକାକରଣ ଠାରୁ ଅବଗତ ରୁହନ୍ତୁ',
-    feat_hosp_title: 'ହସ୍ପିଟାଲ୍ ଲୋକେଟର୍',
-    feat_hosp_desc: 'ନିକଟସ୍ଥ ହସ୍ପିଟାଲ୍ ଏବଂ ସୁବିଧା ତୁରନ୍ତ ଖୋଜନ୍ତୁ',
-    feat_247_title: '24/7 ଉପଲବ୍ଧ',
-    feat_247_desc: 'କେବେ, କୋଥାଉ ମଧ୍ୟ ସ୍ୱାସ୍ଥ୍ୟ ସହାୟତା',
+    features_title: 'विद्या को क्यों चुनो? 🎓',
+    feat_personalized_title: 'व्यक्तिगत सीखना',
+    feat_personalized_desc: 'सामग्री तुम्हारी कक्षा और गति के अनुसार बदलती है',
+    feat_gamified_title: 'गेमिफाइड क्विज़',
+    feat_gamified_desc: 'सितारे ⭐ और बैज 🏆 कमाओ सीखते समय',
+    feat_textbook_title: 'पाठ्यपुस्तक से मेल',
+    feat_textbook_desc: 'CBSE पाठ्यक्रम के साथ सभी ग्रेड 1-4 के लिए',
+    feat_indian_title: 'भारतीय संदर्भ',
+    feat_indian_desc: 'भारतीय जीवन से वास्तविक उदाहरण: खाना, त्योहार, खेल',
+    feat_doubt_title: 'निर्देशित संदेह समाधान',
+    feat_doubt_desc: 'कभी सीधे उत्तर नहीं! हिंट तुम्हें खुद खोजने में मदद करते हैं',
+    feat_progress_title: 'प्रगति ट्रैकिंग',
+    feat_progress_desc: 'तुम्हारी उपलब्धियों को देखो विस्तृत विश्लेषण के साथ',
   }
 }
 
 const features = [
-  { icon: 'fas fa-language', key: 'multi' },
-  { icon: 'fas fa-stethoscope', key: 'symptom' },
-  { icon: 'fas fa-shield-virus', key: 'prev' },
-  { icon: 'fas fa-syringe', key: 'vax' },
-  { icon: 'fas fa-hospital', key: 'hosp' },
-  { icon: 'fas fa-clock', key: '247' },
+  { emoji: '✨', key: 'personalized' },
+  { emoji: '🎮', key: 'gamified' },
+  { emoji: '📖', key: 'textbook' },
+  { emoji: '🇮🇳', key: 'indian' },
+  { emoji: '🤔', key: 'doubt' },
+  { emoji: '🏆', key: 'progress' },
 ]
 
 export default function FeaturesSection() {
@@ -67,8 +52,8 @@ export default function FeaturesSection() {
         <div className="features-grid">
           {features.map((f, idx) => (
             <div key={idx} className="feature-card">
-              <div className="feature-icon">
-                <i className={f.icon}></i>
+              <div className="feature-emoji">
+                <span className="emoji-large">{f.emoji}</span>
               </div>
               <h3>{translations[language][`feat_${f.key}_title`]}</h3>
               <p>{translations[language][`feat_${f.key}_desc`]}</p>
