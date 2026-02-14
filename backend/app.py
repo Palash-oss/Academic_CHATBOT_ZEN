@@ -1,8 +1,9 @@
 from flask import Flask, render_template, jsonify, request
+from flask_cors import CORS
 from src.helper import download_hugging_face_embeddings
 from langchain_pinecone import PineconeVectorStore
 from langchain_core.vectorstores import VectorStoreRetriever
-import ollama
+from transformers import pipeline
 from dotenv import load_dotenv
 import os
 import math
@@ -10,7 +11,14 @@ import time
 import requests
 import json
 
-app = Flask(__name__)
+# Configure paths so templates/static live in ../frontend
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+FRONTEND_DIR = os.path.join(BASE_DIR, 'frontend')
+FRONTEND_STATIC = os.path.join(FRONTEND_DIR, 'static')
+FRONTEND_TEMPLATES = os.path.join(FRONTEND_DIR, 'templates')
+
+app = Flask(__name__, static_folder=FRONTEND_STATIC, template_folder=FRONTEND_TEMPLATES)
+CORS(app)
 
 load_dotenv()
 
@@ -157,9 +165,20 @@ def fetch_hospitals_from_osm(user_lat: float, user_lng: float, radius_m: int = 7
     except Exception:
         return []
 
-def get_llama2_response(prompt):
-    response = ollama.chat(model='llama2', messages=[{'role': 'user', 'content': prompt}])
-    return response['message']['content']
+# Initialize HuggingFace text generation pipeline
+try:
+    qa_pipeline = pipeline("text-generation", model="meta-llama/Llama-2-7b-chat-hf", device=-1)
+except Exception:
+    # Fallback to smaller model if Llama-2 not available
+    qa_pipeline = pipeline("text-generation", model="distilgpt2", device=-1)
+
+def get_ai_response(prompt):
+    """Generate response using HuggingFace model"""
+    try:
+        result = qa_pipeline(prompt, max_length=512, do_sample=True, temperature=0.7)
+        return result[0]['generated_text']
+    except Exception as e:
+        return f"Unable to generate response: {str(e)}"
 
 @app.route("/")
 def index():
@@ -187,7 +206,7 @@ def chat():
         relevant_docs = active_retriever.get_relevant_documents(msg)
         context = "\n".join([doc.page_content for doc in relevant_docs])
         prompt = f"You are a helpful medical assistant. Use the following context to answer the question.\n\nContext:\n{context}\n\nQuestion: {msg}\nAnswer:"
-        final_answer = get_llama2_response(prompt)
+        final_answer = get_ai_response(prompt)
 
         sources = []
         for d in relevant_docs or []:
@@ -302,7 +321,7 @@ def receive_webhook():
         relevant_docs = retriever.get_relevant_documents(text)
         context = "\n".join([doc.page_content for doc in relevant_docs])
         prompt = f"You are a helpful medical assistant. Use the following context to answer the question.\n\nContext:\n{context}\n\nQuestion: {text}\nAnswer:"
-        answer = get_llama2_response(prompt)
+        answer = get_ai_response(prompt)
 
         wa_send_message(phone_number_id, from_number, answer)
         return jsonify({"status": "ok"}), 200
@@ -320,7 +339,7 @@ def twilio_whatsapp():
         relevant_docs = retriever.get_relevant_documents(body)
         context = "\n".join([doc.page_content for doc in relevant_docs])
         prompt = f"You are a helpful medical assistant. Use the following context to answer the question.\n\nContext:\n{context}\n\nQuestion: {body}\nAnswer:"
-        answer = get_llama2_response(prompt)
+        answer = get_ai_response(prompt)
 
         if TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN and TWILIO_WHATSAPP_FROM:
             try:
@@ -340,34 +359,3 @@ def twilio_whatsapp():
 
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=8080, debug=True)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
